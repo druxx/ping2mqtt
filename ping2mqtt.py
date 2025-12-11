@@ -21,7 +21,9 @@ MQTT_HOST = environ.get('MQTT_HOST', 'localhost')
 MQTT_PORT = int(environ.get('MQTT_PORT', '1883'))
 MQTT_TOPIC_PREFIX = environ.get('MQTT_TOPIC_PREFIX', 'ping')
 MQTT_QOS = int(environ.get('MQTT_QOS', 1))
-DISCOVERY_TOPIC = HOMEASSISTANT_PREFIX + '/binary_sensor/ping/{}/config'
+MQTT_TIMEOUT = int(environ.get('MQTT_TIMEOUT', 60))
+
+REPORT_INTERVAL = int(environ.get('REPORT_INTERVAL', '60'))  # seconds
 
 hostlist = {}
 
@@ -59,104 +61,115 @@ def mqtt_send(topic, payload, retain=False):
         if DEBUG:
             print(f'Sending to MQTT: {topic}: {payload}')
         mqtt.publish(topic, payload=payload, qos=MQTT_QOS, retain=retain)
-
     except Exception as e:
         print(f'MQTT Publish Failed: {e}')
 
+#  "unit_of_measurement": "hPa",
+#  "suggested_display_precision": 0
 
-def send_homeassistant_registration(hostname):
-    """Register an MQTT binary sensor for a host.
+def getDiscoveryHostname(hostname):
+    """Return Home Assistant discovery hostname for a host.
     """
-    discovery_hostname = hostname.replace('.', '_').replace(' ', '_')
-    registration_topic = DISCOVERY_TOPIC.format(discovery_hostname)
-    registration_packet = {
+    return hostname.replace('.', '_').replace(' ', '_')
+
+def getHADeviceIdentifier(hostname):
+    """Return Home Assistant device identifier for a host.
+    """
+    return f"{MQTT_TOPIC_PREFIX.title()}_{getDiscoveryHostname(hostname)}".lower()
+
+
+def getHADeviceInfo(hostname):
+    """Return Home Assistant device info dictionary for a host.
+    """
+    return {
+        'identifiers': getHADeviceIdentifier(hostname),
         'name': f"{MQTT_TOPIC_PREFIX.title()} {hostname}",
-        'unique_id': f'{MQTT_TOPIC_PREFIX}_{registration_topic}',
+        'model': 'ping2mqtt',
+        'manufacturer': 'Custom Script'
+    }   
+
+def getDefaultRegistrationPacket(hostname, sensor='alive'):
+    """Return default Home Assistant registration packet for a host.
+    """
+    return {
+        'device': getHADeviceInfo(hostname),
+        'unique_id': getHADeviceIdentifier(hostname) + f'_{sensor}',
+        'object_id': getHADeviceIdentifier(hostname) + f'_{sensor}',
         'availability_topic': 'ping/status',
         'payload_available': 'online',
         'payload_not_available': 'offline',
-        'state_topic': f'{MQTT_TOPIC_PREFIX}/{hostname}',
-        'value_template': '{{ value_json.alive }}',
-        'payload_on': 'on',
-        'payload_off': 'off',
-        'device_class': 'connectivity',
-        'json_attributes_topic': f'{MQTT_TOPIC_PREFIX}/{hostname}',
+        'state_topic': f'{MQTT_TOPIC_PREFIX}/' + getDiscoveryHostname(hostname),
+#        'device_class': 'connectivity'
+#        'json_attributes_topic': f'{MQTT_TOPIC_PREFIX}/{hostname}',
     }
-    print(f'Registering {hostname} with Home Assistant: {registration_topic}: {registration_packet}')
-    mqtt_send(registration_topic, json.dumps(registration_packet), retain=True)
 
-
-def update_last_mins(host, hostresult):
-    """Updates the last 1/5 min datasets.
+def send_homeassistant_registration(hostname):
+    """Register an MQTT device for a host.
     """
-    if len(host['last_1_min']) >= 6:
-        del(host['last_1_min'][0])
-    host['last_1_min'].append({'min': hostresult.min_rtt, 'avg': hostresult.avg_rtt, 'max': hostresult.max_rtt, 'sent': hostresult.packets_sent, 'received': hostresult.packets_received})
+    entities = { 'alive': {'type': 'binary_sensor' }, \
+        'count': { 'type': 'sensor' }, \
+        'min': { 'type': 'sensor', 'unit': 'msec' }, \
+        'avg': { 'type': 'sensor', 'unit': 'msec' }, \
+        'max': { 'type': 'sensor', 'unit': 'msec' }, \
+        'percent_dropped': { 'type': 'sensor', 'unit': '%' } }
 
-    if len(host['last_5_min']) >= 30:
-        del(host['last_5_min'][0])
-    host['last_5_min'].append({'min': hostresult.min_rtt, 'avg': hostresult.avg_rtt, 'max': hostresult.max_rtt, 'sent': hostresult.packets_sent, 'received': hostresult.packets_received})
+    for key, typeUnit in entities.items():
+        registration_packet = getDefaultRegistrationPacket(hostname, sensor=key)
+        registration_packet['value_template'] = f'{{{{ value_json.{key} }}}}'
+        if 'unit' in typeUnit:
+            registration_packet['unit_of_measurement'] = typeUnit['unit']
+        registration_packet['value_template'] = f'{{{{ value_json.{key} }}}}'
+        registration_topic = HOMEASSISTANT_PREFIX + '/{}/{}/{}/config'.format(typeUnit['type'], getHADeviceIdentifier(hostname), key)
+#        print(key, registration_packet)
+        mqtt_send(registration_topic, json.dumps(registration_packet), retain=True)
 
-    host['latency'] = {
-        'alive': 'on' if host['alive'] else 'off',
-        'last_10_sec': min_avg_max([host['last_1_min'][-1]]),
-        'last_1_min': min_avg_max(host['last_1_min']),
-        'last_5_min': min_avg_max(host['last_5_min'])
-    }
 
 
-def min_avg_max(dataset):
-    """Takes a sequence of min,avg,max dictionaries and finds the min,avg,max of the set.
+def update_statistics(stat,delay):
+    """Update statistics dictionary with new delay value.
     """
-    result = {
-        'min': None, 
-        'avg': None, 
-        'max': None,
-        'percent_dropped': None
-    }
-    avg_sum = 0
-    sent = 0
-    received = 0
-
-    for datapoint in dataset:
-        if not result['min'] or datapoint['min'] < result['min']:
-            result['min'] = datapoint['min']
-
-        if not result['max'] or datapoint['max'] > result['max']:
-            result['max'] = datapoint['max']
-
-        avg_sum += datapoint['avg']
-        sent += datapoint['sent']
-        received += datapoint['received']
-
-    result['avg'] = avg_sum / len(dataset)
-    if received == 0:
-        result['percent_dropped'] = 100
-    else:
-        result['percent_dropped'] = 100 - (received / sent * 100)
-
-    return result
+    stat['count'] += 1
+    stat['sum'] += delay
+    if delay < stat['min']:
+        stat['min'] = delay
+    if delay > stat['max']:
+        stat['max'] = delay
 
 
 
 async def pinger(host):
     alive = False
-    lost = 0
-    max = 0
-    min = 9999
+    stat = {'count': 0, 'sum': 0, 'min': 9999, 'max': 0, 'lost': 0}
+    previous_report_time = 0
     while True:
         start = time.time()
         aliveNow = False
         try:
-            delay = await aioping.ping(host['ip'], timeout=host['interval'], count=1)  # timeout in seconds
+            delay = await aioping.ping(host['ip'], timeout=host['interval'])  # timeout in seconds
             aliveNow = True
+            update_statistics(stat, delay*1000)
         except TimeoutError:
-            lost += 1
+            stat['lost'] += 1
+            stat['count'] += 1
         if aliveNow != alive:
             async with lock:
                 mqtt_send(f'{MQTT_TOPIC_PREFIX}/{host["name"]}', json.dumps({'alive': aliveNow}))
             alive = aliveNow
         sleep = start + host['interval'] - time.time()
+        if time.time() - previous_report_time >= REPORT_INTERVAL:
+            async with lock:
+                mqtt_send(f'{MQTT_TOPIC_PREFIX}/{host["name"]}', json.dumps({
+                    'alive': alive,
+                    'latency': {
+                        'count': stat['count'],
+                        'min': stat['min'],
+                        'avg': stat['sum'] / stat['count'] if stat['count'] > 0 else None,
+                        'max': stat['max'],
+                        'percent_dropped': (stat['lost'] / stat['count'] * 100) if stat['count'] > 0 else 100
+                    }
+                }))
+            previous_report_time = time.time()
+            stat = {'count': 0, 'sum': 0, 'min': 9999, 'max': 0, 'lost': 0}
         await asyncio.sleep(sleep if sleep > 0 else 0)
         
         
@@ -176,6 +189,7 @@ if __name__ == '__main__':
     mqtt.connect(MQTT_HOST, MQTT_PORT, MQTT_TIMEOUT)
     mqtt.publish('ping/status', 'online', qos=MQTT_QOS, retain=True)
     mqtt.loop_start()
+    print('Connected to MQTT broker')
     atexit.register(mqtt_disconnect)
 
     # Register hosts with HA
@@ -184,18 +198,4 @@ if __name__ == '__main__':
 
     asyncio.run(main())
 
-#    while True:
-#        # Ping forever
-#        try:
-#            hostresults = multiping(hostlist, count=10, timeout=1)
-#            for hostresult in hostresults:
-#                host = hostlist[hostresult.address]
-#                host['alive'] = hostresult.is_alive
-#                update_last_mins(host, hostresult)
-#                #print(f'Sending to MQTT: {MQTT_TOPIC_PREFIX}/{host["name"]} {json.dumps(host["latency"])}')
-#                mqtt_send(f'{MQTT_TOPIC_PREFIX}/{host["name"]}', json.dumps(host["latency"]))
-#                #pprint(hostlist)
 
-#        except Exception as e:
-#            print(f'Uncaught exception: {e.__class__.__name__}: {e}')
-#            print_exc()
