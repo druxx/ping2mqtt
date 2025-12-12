@@ -14,7 +14,7 @@ Use docker to launch this. A typical invocation is:
 |----------|---------|-------------|
 | `DEBUG` | | Set to `1` to enable additional debug logging. |
 | `HOMEASSISTANT_PREFIX` | `homeassistant` | The prefix for Home Assistant discovery. Must be the same as `discovery_prefix` in your Home Assistant configuration. |
-| `HOSTLIST` | | A comma separated list of hosts to ping. Each entry: `<hostname[:ip_address][:ping_interval_in_secs>` The default ping interval is 1sec|
+| `HOSTLIST` | | A comma separated list of hosts to ping. Each entry: `<hostname[:ip_address]` The default ping interval is 1sec|
 | `MQTT_CLIENT_ID` | `ping2mqtt` | The client id to send to the MQTT broker. |
 | `MQTT_USER` |  | The user to send to the MQTT broker. Leave unset to disable authentication. |
 | `MQTT_PASSWD` |  | The password to send to the MQTT broker. Leave unset to disable authentication. |

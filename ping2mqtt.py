@@ -64,13 +64,16 @@ def mqtt_send(topic, payload, retain=False):
     except Exception as e:
         print(f'MQTT Publish Failed: {e}')
 
-#  "unit_of_measurement": "hPa",
-#  "suggested_display_precision": 0
 
 def getDiscoveryHostname(hostname):
     """Return Home Assistant discovery hostname for a host.
     """
     return hostname.replace('.', '_').replace(' ', '_')
+
+def getTopic(hostname):
+    """Return MQTT topic for a host.
+    """
+    return f'{MQTT_TOPIC_PREFIX}/' + getDiscoveryHostname(hostname)
 
 def getHADeviceIdentifier(hostname):
     """Return Home Assistant device identifier for a host.
@@ -88,20 +91,31 @@ def getHADeviceInfo(hostname):
         'manufacturer': 'Custom Script'
     }   
 
-def getDefaultRegistrationPacket(hostname, sensor='alive'):
+def getDefaultRegistrationPacket(hostname, sensor, entity):
     """Return default Home Assistant registration packet for a host.
     """
-    return {
+
+    registration_packet = {
+        'name': sensor,
         'device': getHADeviceInfo(hostname),
+        'enabled_by_default': True,
         'unique_id': getHADeviceIdentifier(hostname) + f'_{sensor}',
         'object_id': getHADeviceIdentifier(hostname) + f'_{sensor}',
         'availability_topic': 'ping/status',
-        'payload_available': 'online',
-        'payload_not_available': 'offline',
-        'state_topic': f'{MQTT_TOPIC_PREFIX}/' + getDiscoveryHostname(hostname),
-#        'device_class': 'connectivity'
+        'state_topic': getTopic(hostname),
 #        'json_attributes_topic': f'{MQTT_TOPIC_PREFIX}/{hostname}',
     }
+    registration_packet['value_template'] = f'{{{{ value_json.{sensor} }}}}'
+    if 'unit' in entity:
+        registration_packet['unit_of_measurement'] = entity['unit']
+    if entity['type'] == 'binary_sensor':
+        registration_packet['payload_off'] = 'false'
+        registration_packet['payload_on'] = 'true'
+        registration_packet['device_class'] = 'connectivity'
+    else:
+        registration_packet['state_class'] = 'measurement'
+    return registration_packet
+
 
 def send_homeassistant_registration(hostname):
     """Register an MQTT device for a host.
@@ -113,14 +127,10 @@ def send_homeassistant_registration(hostname):
         'max': { 'type': 'sensor', 'unit': 'msec' }, \
         'percent_dropped': { 'type': 'sensor', 'unit': '%' } }
 
-    for key, typeUnit in entities.items():
-        registration_packet = getDefaultRegistrationPacket(hostname, sensor=key)
-        registration_packet['value_template'] = f'{{{{ value_json.{key} }}}}'
-        if 'unit' in typeUnit:
-            registration_packet['unit_of_measurement'] = typeUnit['unit']
-        registration_packet['value_template'] = f'{{{{ value_json.{key} }}}}'
-        registration_topic = HOMEASSISTANT_PREFIX + '/{}/{}/{}/config'.format(typeUnit['type'], getHADeviceIdentifier(hostname), key)
-#        print(key, registration_packet)
+    for key, entity in entities.items():
+        registration_packet = getDefaultRegistrationPacket(hostname, key, entity)
+        
+        registration_topic = HOMEASSISTANT_PREFIX + '/{}/{}/{}/config'.format(entity['type'], getHADeviceIdentifier(hostname), key)
         mqtt_send(registration_topic, json.dumps(registration_packet), retain=True)
 
 
@@ -153,20 +163,18 @@ async def pinger(host):
             stat['count'] += 1
         if aliveNow != alive:
             async with lock:
-                mqtt_send(f'{MQTT_TOPIC_PREFIX}/{host["name"]}', json.dumps({'alive': aliveNow}))
+                mqtt_send(getTopic(host['name']), json.dumps({'alive': 'true' if aliveNow else 'false'}))
             alive = aliveNow
         sleep = start + host['interval'] - time.time()
         if time.time() - previous_report_time >= REPORT_INTERVAL:
             async with lock:
-                mqtt_send(f'{MQTT_TOPIC_PREFIX}/{host["name"]}', json.dumps({
-                    'alive': alive,
-                    'latency': {
-                        'count': stat['count'],
-                        'min': stat['min'],
-                        'avg': stat['sum'] / stat['count'] if stat['count'] > 0 else None,
-                        'max': stat['max'],
-                        'percent_dropped': (stat['lost'] / stat['count'] * 100) if stat['count'] > 0 else 100
-                    }
+                mqtt_send(getTopic(host['name']), json.dumps({
+                    'alive': 'true' if alive else 'false',
+                    'count': stat['count'],
+                    'min': stat['min'],
+                    'avg': stat['sum'] / stat['count'] if stat['count'] > 0 else None,
+                    'max': stat['max'],
+                    'percent_dropped': (stat['lost'] / stat['count'] * 100) if stat['count'] > 0 else 100
                 }))
             previous_report_time = time.time()
             stat = {'count': 0, 'sum': 0, 'min': 9999, 'max': 0, 'lost': 0}
@@ -195,6 +203,7 @@ if __name__ == '__main__':
     # Register hosts with HA
     for host in hostlist.values():
         send_homeassistant_registration(host['name'])
+    print('HA registration done')
 
     asyncio.run(main())
 
