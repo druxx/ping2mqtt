@@ -1,4 +1,5 @@
-FROM debian:stable
+FROM python:3.13
+
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
 
