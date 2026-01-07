@@ -10,5 +10,5 @@ COPY ping2mqtt.py requirements.txt /app
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-CMD ["python", "ping2mqtt.py"]
+CMD ["python", "-u", "ping2mqtt.py"]
 

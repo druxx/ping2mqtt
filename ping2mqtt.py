@@ -5,6 +5,7 @@ import asyncio
 import atexit
 import json
 import time
+import sys
 from os import environ
 from socket import gethostbyname
 
@@ -49,7 +50,7 @@ for host in HOSTLIST.split(','):
     }
 
 lock = asyncio.Lock()
-mqtt = paho.mqtt.client.Client()
+mqtt = paho.mqtt.client.Client(callback_api_version=paho.mqtt.client.CallbackAPIVersion.VERSION2)
 
 def mqtt_disconnect():
     mqtt.disconnect()
@@ -63,6 +64,8 @@ def mqtt_send(topic, payload, retain=False):
         mqtt.publish(topic, payload=payload, qos=MQTT_QOS, retain=retain)
     except Exception as e:
         print(f'MQTT Publish Failed: {e}')
+        time.sleep(5)
+        sys.exit(1)
 
 
 def getDiscoveryHostname(hostname):
