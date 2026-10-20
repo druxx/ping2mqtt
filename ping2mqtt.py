@@ -191,7 +191,12 @@ async def main():
         tasks.append(t)
 
     # keep the program alive forever
-    await asyncio.gather(*tasks)
+    try:
+        await asyncio.gather(*tasks, timeout=72*60*60)  # 3 days timeout
+    except Exception as e:
+        print(f"Failure: {e}")
+        sys.exit(1)
+
 
 if __name__ == '__main__':
     # Start the MQTT thread
