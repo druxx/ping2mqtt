@@ -192,7 +192,8 @@ async def main():
 
     # keep the program alive forever
     try:
-        await asyncio.gather(*tasks, timeout=72*60*60)  # 3 days timeout
+        async with asyncio.timeout(24*60*60):  # 1 day timeout
+            await asyncio.gather(*tasks)
     except Exception as e:
         print(f"Failure: {e}")
         sys.exit(1)
